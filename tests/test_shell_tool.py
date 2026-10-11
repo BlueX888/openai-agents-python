@@ -636,6 +636,36 @@ async def test_shell_tool_action_negative_max_output_length_clamps_to_zero() -> 
 
 
 @pytest.mark.asyncio
+async def test_shell_tool_empty_shell_result_does_not_fabricate_output() -> None:
+    """An empty ShellResult must pass through without fabricating stdout text."""
+    shell_tool = ShellTool(executor=lambda request: ShellResult(output=[]))
+
+    tool_run = ToolRunShellCall(tool_call=_shell_call(), shell_tool=shell_tool)
+    agent = Agent(name="shell-agent", tools=[shell_tool])
+    context_wrapper: RunContextWrapper[Any] = RunContextWrapper(context=None)
+
+    result = await ShellAction.execute(
+        agent=agent,
+        call=tool_run,
+        hooks=RunHooks[Any](),
+        context_wrapper=context_wrapper,
+        config=RunConfig(),
+    )
+
+    assert isinstance(result, ToolCallOutputItem)
+    assert result.output == "(no output)"
+    raw_item = cast(dict[str, Any], result.raw_item)
+    assert raw_item["type"] == "shell_call_output"
+    assert raw_item["status"] == "completed"
+    assert raw_item["output"] == []
+    assert "shell_output" not in raw_item
+    assert "(no output)" not in json.dumps(raw_item)
+    input_payload = cast(dict[str, Any], result.to_input_item())
+    assert input_payload["output"] == []
+    assert "(no output)" not in json.dumps(input_payload)
+
+
+@pytest.mark.asyncio
 async def test_shell_tool_needs_approval_returns_approval_item() -> None:
     """Test that shell tool with needs_approval=True returns ToolApprovalItem."""
 
