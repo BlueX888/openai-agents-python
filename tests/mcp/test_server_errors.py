@@ -692,6 +692,79 @@ async def test_call_tool_nested_exception_group_mapping(url: str, retains_cause:
         _assert_not_retained_in_traceback_locals(exc_info.value, http_error)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "retains_cause"),
+    [
+        (_SAFE_URL, True),
+        (_CREDENTIALED_URL, False),
+    ],
+)
+async def test_call_tool_nested_exception_group_mapping_client_session_servers(
+    url: str, retains_cause: bool
+):
+    """
+    Regression test ensuring that client-session servers (SSE and stdio) map nested
+    ExceptionGroups containing HTTP errors to a UserError in call_tool(), matching
+    MCPServerStreamableHttp instead of propagating the raw credential-bearing group.
+    """
+    server = MCPServerSse(params={"url": url})
+    server.session = MagicMock()
+
+    request = httpx.Request("POST", url)
+    http_error = httpx.ConnectError("Network unreachable", request=request)
+    inner_group = BaseExceptionGroup("inner_failures", [http_error])
+    outer_group = BaseExceptionGroup("outer_failures", [inner_group])
+
+    with patch.object(server, "_run_with_retries", side_effect=outer_group):
+        with pytest.raises(UserError) as exc_info:
+            await server.call_tool(tool_name="test_tool", arguments={})
+
+    assert "Connection lost" in str(exc_info.value)
+    if retains_cause:
+        assert exc_info.value.__cause__ is http_error
+    else:
+        assert "mcp.example.com/sse" in str(exc_info.value)
+        _assert_url_credentials_hidden(exc_info.value)
+        _assert_not_retained_in_traceback_locals(exc_info.value, http_error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "retains_cause"),
+    [
+        (_SAFE_URL, True),
+        (_CREDENTIALED_URL, False),
+    ],
+)
+async def test_list_tools_first_page_exception_group_mapping(url: str, retains_cause: bool):
+    """
+    Regression test ensuring that list_tools() maps an ExceptionGroup containing
+    HTTP errors to a UserError on the first page, matching its own later-page
+    handling and call_tool() instead of propagating the raw credential-bearing group.
+    """
+    server = MCPServerSse(params={"url": url})
+    session = MagicMock()
+    http_error = httpx.ConnectError(
+        "Network unreachable",
+        request=httpx.Request("GET", url),
+    )
+    session.list_tools = AsyncMock(side_effect=BaseExceptionGroup("transport failed", [http_error]))
+    server.session = session
+    server.max_retry_attempts = 0
+
+    with pytest.raises(UserError) as exc_info:
+        await server.list_tools(None, None)
+
+    assert "Connection lost" in str(exc_info.value)
+    if retains_cause:
+        assert exc_info.value.__cause__ is http_error
+    else:
+        assert "mcp.example.com/sse" in str(exc_info.value)
+        _assert_url_credentials_hidden(exc_info.value)
+        _assert_not_retained_in_traceback_locals(exc_info.value, http_error)
+
+
 def _mixed_request_error_group(
     later_url: str,
 ) -> tuple[BaseExceptionGroup, httpx.ReadError, httpx.ConnectError]:

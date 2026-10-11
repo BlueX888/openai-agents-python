@@ -1534,6 +1534,42 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 transport_error = UserError(
                     f"Failed to list tools from MCP server '{self._error_name}': Request failed."
                 )
+        except BaseExceptionGroup as e:
+            http_errors = self._extract_http_errors_from_exception(e)
+            if not http_errors:
+                raise
+
+            unsafe_http_error = _first_unretainable_transport_error(http_errors)
+            http_error = unsafe_http_error or http_errors[0]
+            transport_cause = _safe_transport_cause(http_error)
+            if is_http_status_error(http_error):
+                status_code = http_status_code(http_error)
+                transport_error = UserError(
+                    f"Failed to list tools from MCP server '{self._error_name}': "
+                    f"HTTP error {status_code}"
+                )
+            elif is_http_connect_error(http_error):
+                transport_error = UserError(
+                    f"Failed to list tools from MCP server '{self._error_name}': Connection lost. "
+                    f"The server may have disconnected."
+                )
+            elif is_http_timeout_error(http_error):
+                transport_error = UserError(
+                    f"Failed to list tools from MCP server '{self._error_name}': "
+                    "Connection timeout."
+                )
+            elif is_http_request_error(http_error):
+                if transport_cause is not None:
+                    raise
+                transport_error = UserError(
+                    f"Failed to list tools from MCP server '{self._error_name}': Request failed."
+                )
+            else:
+                raise
+            if transport_cause is None:
+                http_errors.clear()
+                del http_error
+                del unsafe_http_error
 
         assert transport_error is not None
         self._raise_mapped_transport_error(transport_error, transport_cause)
@@ -1591,6 +1627,43 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                     f"Failed to call tool '{tool_name}' on MCP server '{self._error_name}': "
                     "Request failed."
                 )
+        except BaseExceptionGroup as e:
+            http_errors = self._extract_http_errors_from_exception(e)
+            if not http_errors:
+                raise
+
+            unsafe_http_error = _first_unretainable_transport_error(http_errors)
+            http_error = unsafe_http_error or http_errors[0]
+            transport_cause = _safe_transport_cause(http_error)
+            if is_http_status_error(http_error):
+                status_code = http_status_code(http_error)
+                transport_error = UserError(
+                    f"Failed to call tool '{tool_name}' on MCP server '{self._error_name}': "
+                    f"HTTP error {status_code}"
+                )
+            elif is_http_connect_error(http_error):
+                transport_error = UserError(
+                    f"Failed to call tool '{tool_name}' on MCP server '{self._error_name}': "
+                    "Connection lost. The server may have disconnected."
+                )
+            elif is_http_timeout_error(http_error):
+                transport_error = UserError(
+                    f"Failed to call tool '{tool_name}' on MCP server '{self._error_name}': "
+                    "Connection timeout."
+                )
+            elif is_http_request_error(http_error):
+                if transport_cause is not None:
+                    raise
+                transport_error = UserError(
+                    f"Failed to call tool '{tool_name}' on MCP server '{self._error_name}': "
+                    "Request failed."
+                )
+            else:
+                raise
+            if transport_cause is None:
+                http_errors.clear()
+                del http_error
+                del unsafe_http_error
 
         assert transport_error is not None
         self._raise_mapped_transport_error(transport_error, transport_cause)
