@@ -1854,6 +1854,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 self.session = None
                 self._get_session_id = None
                 self._v2_session_id = None
+                self._tools_list = None
+                self._cache_dirty = True
 
             if cleanup_error is not None:
                 self._raise_mapped_transport_error(cleanup_error, None)

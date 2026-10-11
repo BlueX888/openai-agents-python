@@ -342,3 +342,99 @@ async def test_cached_tools_is_none_before_the_first_list(
 
     async with server:
         assert server.cached_tools is None
+
+
+@pytest.mark.asyncio
+@patch("mcp.client.stdio.stdio_client", return_value=DummyStreamsContextManager())
+@patch("mcp.client.session.ClientSession.initialize", new_callable=AsyncMock, return_value=None)
+@patch("mcp.client.session.ClientSession.list_tools")
+async def test_reconnected_server_refetches_the_tools_list(
+    mock_list_tools: AsyncMock, mock_initialize: AsyncMock, mock_stdio_client
+):
+    """After cleanup() and connect(), list_tools() must query the new session instead of serving
+    the cache left over from the previous connection."""
+    server = MCPServerStdio(params={"command": tee}, cache_tools_list=True)
+    mock_list_tools.side_effect = [
+        ListToolsResult(
+            tools=[
+                MCPTool(
+                    name="weather",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                )
+            ]
+        ),
+        ListToolsResult(
+            tools=[
+                MCPTool(
+                    name="weather",
+                    inputSchema={"type": "object", "properties": {"city": {"type": "string"}}},
+                ),
+                MCPTool(name="forecast", inputSchema={}),
+            ]
+        ),
+    ]
+
+    async with server:
+        await server.list_tools()
+    assert mock_list_tools.call_count == 1
+
+    async with server:
+        reconnected_tools = await server.list_tools()
+
+    assert [tool.name for tool in reconnected_tools] == ["weather", "forecast"]
+    assert reconnected_tools[0].input_schema.get("required") is None
+    assert mock_list_tools.call_count == 2, "the reconnected server must be queried for its tools"
+
+
+@pytest.mark.asyncio
+@patch("mcp.client.stdio.stdio_client", return_value=DummyStreamsContextManager())
+@patch("mcp.client.session.ClientSession.initialize", new_callable=AsyncMock, return_value=None)
+@patch("mcp.client.session.ClientSession.call_tool", new_callable=AsyncMock)
+@patch("mcp.client.session.ClientSession.list_tools")
+async def test_reconnected_server_does_not_validate_against_the_stale_schema(
+    mock_list_tools: AsyncMock,
+    mock_call_tool: AsyncMock,
+    mock_initialize: AsyncMock,
+    mock_stdio_client,
+):
+    """A call that is valid for the reconnected server must reach it instead of being blocked by
+    the previous connection's required parameters."""
+    from mcp.types import CallToolResult, TextContent
+
+    server = MCPServerStdio(params={"command": tee}, cache_tools_list=True)
+    mock_list_tools.side_effect = [
+        ListToolsResult(
+            tools=[
+                MCPTool(
+                    name="weather",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                )
+            ]
+        ),
+        ListToolsResult(
+            tools=[
+                MCPTool(
+                    name="weather",
+                    inputSchema={"type": "object", "properties": {"city": {"type": "string"}}},
+                )
+            ]
+        ),
+    ]
+    mock_call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
+
+    async with server:
+        await server.list_tools()
+
+    async with server:
+        await server.list_tools()
+        await server.call_tool("weather", {})
+
+    assert mock_call_tool.call_count == 1, "the valid call must reach the reconnected server"
